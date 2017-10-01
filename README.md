@@ -36,6 +36,7 @@ one large bottleneck original symchk has.
 
 Look how damn fast this stuff is!
 
+```
 PS C:\dev\pdblister> Measure-Command { cargo run --release }
     Finished release [optimized] target(s) in 0.0 secs
      Running `target\release\pdblister.exe`
@@ -69,4 +70,5 @@ TotalHours        : 0.00249887466666667
 TotalMinutes      : 0.14993248
 TotalSeconds      : 8.9959488
 TotalMilliseconds : 8995.9488
+```
 

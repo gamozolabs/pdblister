@@ -10,9 +10,48 @@
 /// has been generated use `symchk /im manifest /s <symbol path>`
 
 use std::io;
+use std::env;
+use std::thread;
+use std::process::Command;
 use std::fs::File;
 use std::io::{Read, Write, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+const USAGE: &'static str =
+"Usage:
+
+    pdblister [manifest | download | clean] <filepath>
+ 
+    === Create manifest === 
+    
+        pdblister manifest <filepath>
+
+        This command takes in a filepath to recursively search for files that
+        have a corresponding PDB. This creates a file called `manifest` which
+        is compatible with symchk.
+        
+        For example `pdblister manifest C:\\windows` will create `manifest`
+        containing all of the PDB signatures for all of the files in
+        C:\\windows.
+
+    === Download from manifest ===
+
+        pdblister download
+
+        This command takes no parameters. It simply downloads all the PDBs
+        specified in the `manifest` file from msdl.microsoft.com to a folder
+        called `symbols` in the current directory. To change this, change the
+        SYMPATH global in the code.
+
+    === Clean ===
+
+        pdblister clean
+
+        This command removes the `manifest` file as well as the symbol folder
+";
+
+const SYMPATH: &'static str =
+    "SRV*symbols*http://msdl.microsoft.com/download/symbols";
 
 /// Set this to true to enable status/progress messages
 const STATUS_MESSAGES: bool = true;
@@ -386,31 +425,106 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
     Err("Failed to find RSDS codeview directory".into())
 }
 
+fn download_worker(filename: PathBuf)
+{
+    let output = Command::new("symchk").args(
+        &["/im", filename.to_str().unwrap(), "/s",
+        SYMPATH]).
+        output().expect("Failed to run command");
+
+    print!("{:?}\n", output.status);
+}
+
 fn main()
 {
-    /* List all files in system32 */
-    print!("Generating file listing...\n");
-    let listing = recursive_listdir(&Path::new("C:\\windows\\system32")).
-        expect("Failed to list directory");
-    print!("Done!\n");
+    let args: Vec<String> = env::args().collect();
 
-    /* For each file, try to parse PDB information out of it and print the
-     * manifest-style information to the screen.
-     */
-    let mut output_pdbs = Vec::new();
-    for (ii, filename) in listing.iter().enumerate() {
-        if STATUS_MESSAGES {
-            print!("\rParsed {} of {} files ({} pdbs)",
-                ii, listing.len(), output_pdbs.len());
+    if args.len() == 3 && args[1] == "manifest" {
+        /* List all files in the directory specified by args[2] */
+        print!("Generating file listing...\n");
+        let listing = recursive_listdir(&Path::new(args[2].as_str())).
+            expect("Failed to list directory");
+        print!("Done!\n");
+
+        /* For each file, try to parse PDB information out of it and print the
+         * manifest-style information to the screen.
+         */
+        let mut output_pdbs = Vec::new();
+        for (ii, filename) in listing.iter().enumerate() {
+            if let Ok(manifest_str) = get_pdb(&filename) {
+                output_pdbs.push(manifest_str);
+            }
+
+            if STATUS_MESSAGES {
+                print!("\rParsed {} of {} files ({} pdbs)",
+                    ii + 1, listing.len(), output_pdbs.len());
+            }
         }
-        if let Ok(manifest_str) = get_pdb(&filename) {
-            output_pdbs.push(manifest_str);
+        print!("\n");
+
+        let mut output_file = File::create("manifest").
+            expect("Failed to create output manifest file");
+        output_file.write_all(output_pdbs.join("\n").as_bytes()).
+            expect("Failed to write to manifest file");
+    } else if args.len() == 2 && args[1] == "download" {
+        const NUM_PIECES: usize = 64;
+
+        /* Read the entire manifest file into a string */
+        let mut buf = String::new();
+        let mut fd = match File::open("manifest") {
+            Ok(fd) => fd,
+            Err(_) => {
+                print!("Failed to open manifest, did you create one?\n");
+                return;
+            },
+        };
+        fd.read_to_string(&mut buf).expect("Failed to read file");
+
+        /* Split the file into lines and collect into a vector */
+        let lines: Vec<String> = buf.lines().map(|l| String::from(l)).collect();
+
+        /* If there is nothing to download, return out early */
+        if lines.len() == 0 {
+            print!("Nothing to download\n");
+            return;
         }
+
+        /* Calculate number of entries per temporary manifest to split into
+         * NUM_PIECES chunks.
+         */
+        let chunk_size = (lines.len() + NUM_PIECES - 1) / NUM_PIECES;
+
+        print!("Trying to download {} PDBs\n", lines.len());
+
+        /* Create worker threads downloading each chunk using symchk */
+        let mut threads = Vec::new();
+        for (ii, lines) in lines.chunks(chunk_size).enumerate() {
+            let mut tmp_path = env::temp_dir();
+            tmp_path.push(format!("manifest_{:04}", ii));
+
+            {
+                /* Create chunked manifest file */
+                let mut fd = File::create(&tmp_path).
+                    expect("Failed to create split manifest");
+                fd.write_all(lines.join("\n").as_bytes()).
+                    expect("Failed to write split manifest");
+            }
+
+            /* Create worker */
+            threads.push(thread::spawn(move || download_worker(tmp_path)));
+        }
+
+        /* Wait for all threads to complete. Discard return status */
+        for thr in threads {
+            let _ = thr.join();
+        }
+    } else if args[1] == "clean" {
+        /* Ignores all errors during clean */
+        let _ = std::fs::remove_dir_all("symbols");
+        let _ = std::fs::remove_file("manifest");
+    } else {
+        /* Print out usage information */
+        print!("{}", USAGE);
     }
-
-    let mut output_file = File::create("manifest").
-        expect("Failed to create output manifest file");
-    output_file.write_all(output_pdbs.join("\n").as_bytes()).
-        expect("Failed to write to manifest file");
 }
 

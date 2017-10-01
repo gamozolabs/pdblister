@@ -11,18 +11,49 @@ The output manifest is compatible with symchk and thus symchk is currently
 used for the actual download. To download symbols after this manifest
 has been generated use `symchk /im manifest /s <symbol path>`
 
+# Usage
+
+Usage:
+
+    pdblister [manifest | download | clean] <filepath>
+ 
+    === Create manifest === 
+    
+        pdblister manifest <filepath>
+
+        This command takes in a filepath to recursively search for files that
+        have a corresponding PDB. This creates a file called `manifest` which
+        is compatible with symchk.
+        
+        For example `pdblister manifest C:\\windows` will create `manifest`
+        containing all of the PDB signatures for all of the files in
+        C:\\windows.
+
+    === Download from manifest ===
+
+        pdblister download
+
+        This command takes no parameters. It simply downloads all the PDBs
+        specified in the `manifest` file from msdl.microsoft.com to a folder
+        called `symbols` in the current directory. To change this, change the
+        SYMPATH global in the code.
+
+    === Clean ===
+
+        pdblister clean
+
+        This command removes the `manifest` file as well as the symbol folder
+
 # Future
 
-In the future this will take parameters (not many, just a path and an output
-filename).
+More configuration could be done through command line parameters. Such as
+number of threads for downloads and symbol paths.
 
-I also want to make it so you can split the manifest into n-pieces or n-sized
-chunks, and then do symchk download in parallel, as symchk is a bit slow
-(but it has to do some decompression so it's fair).
+Randomizing the order of the files in the manifest would make downloads more
+consistant by not having any filesystem locality bias in the files.
 
-I don't plan on making this do the full symchk chain of downloading files and
-extracting them and maintaining the sympath stuff. I've done it before and it
-just wasn't worth it. The slow part is almost always just listing the directory
+Deduping the files in the manifests could also help, but this isn't a big
+deal *shrug*
 
 # Performance
 
@@ -34,41 +65,28 @@ access only occurs if it sees an MZ and PE header and everything is valid).
 It also generates the manifest in memory and dumps it out in one swoop, this is
 one large bottleneck original symchk has.
 
+Then for downloads it splits the manifest into chunks to pass to symchk. By
+default symchk only peaks at about 3-4 Mbps of network usage, but when split
+up (into 64 threads), I can max out my internet at 180 Mbps.
+
 Look how damn fast this stuff is!
 
 ```
-PS C:\dev\pdblister> Measure-Command { cargo run --release }
+On an offline machine:
+
+PS C:\users\pleb\Downloads> .\pdblister.exe clean
+Time elapsed: 0 seconds
+PS C:\users\pleb\Downloads> .\pdblister.exe manifest C:\
+Generating file listing...
+Done!
+Parsed 398632 of 398632 files (23051 pdbs)
+Time elapsed: 104 seconds
+
+On an online machine:
+C:\dev\pdblister>cargo run --release download
     Finished release [optimized] target(s) in 0.0 secs
-     Running `target\release\pdblister.exe`
-
-
-Days              : 0
-Hours             : 0
-Minutes           : 0
-Seconds           : 2
-Milliseconds      : 516
-Ticks             : 25164749
-TotalDays         : 2.91258668981481E-05
-TotalHours        : 0.000699020805555555
-TotalMinutes      : 0.0419412483333333
-TotalSeconds      : 2.5164749
-TotalMilliseconds : 2516.4749
-
-
-
-PS C:\dev\pdblister> Measure-Command { symchk /q /om manifest /r C:\windows\system32 /s C:\THISDOESNOTEXIST }
-
-
-Days              : 0
-Hours             : 0
-Minutes           : 0
-Seconds           : 8
-Milliseconds      : 995
-Ticks             : 89959488
-TotalDays         : 0.000104119777777778
-TotalHours        : 0.00249887466666667
-TotalMinutes      : 0.14993248
-TotalSeconds      : 8.9959488
-TotalMilliseconds : 8995.9488
+     Running `target\release\pdblister.exe download`
+Trying to download 23051 PDBs
+Time elapsed: 120 seconds
 ```
 

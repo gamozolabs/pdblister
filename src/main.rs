@@ -11,6 +11,7 @@
 
 use std::io;
 use std::env;
+use std::time::Instant;
 use std::thread;
 use std::process::Command;
 use std::fs::File;
@@ -427,17 +428,17 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
 
 fn download_worker(filename: PathBuf)
 {
-    let output = Command::new("symchk").args(
+    let _ = Command::new("symchk").args(
         &["/im", filename.to_str().unwrap(), "/s",
         SYMPATH]).
         output().expect("Failed to run command");
-
-    print!("{:?}\n", output.status);
 }
 
 fn main()
 {
     let args: Vec<String> = env::args().collect();
+
+    let it = Instant::now();
 
     if args.len() == 3 && args[1] == "manifest" {
         /* List all files in the directory specified by args[2] */
@@ -518,7 +519,7 @@ fn main()
         for thr in threads {
             let _ = thr.join();
         }
-    } else if args[1] == "clean" {
+    } else if args.len() == 2 && args[1] == "clean" {
         /* Ignores all errors during clean */
         let _ = std::fs::remove_dir_all("symbols");
         let _ = std::fs::remove_file("manifest");
@@ -526,5 +527,7 @@ fn main()
         /* Print out usage information */
         print!("{}", USAGE);
     }
+
+    print!("Time elapsed: {} seconds\n", it.elapsed().as_secs());
 }
 

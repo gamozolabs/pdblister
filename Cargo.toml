@@ -1,0 +1,6 @@
+[package]
+name = "pdblister"
+version = "0.1.0"
+authors = ["Gogs <gogs@fake.local>"]
+
+[dependencies]

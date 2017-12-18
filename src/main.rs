@@ -9,6 +9,10 @@
 /// used for the actual download. To download symbols after this manifest
 /// has been generated use `symchk /im manifest /s <symbol path>`
 
+extern crate rand;
+
+use rand::{thread_rng, Rng};
+
 use std::io;
 use std::env;
 use std::time::Instant;
@@ -21,7 +25,7 @@ use std::path::{Path, PathBuf};
 const USAGE: &'static str =
 "Usage:
 
-    pdblister [manifest | download | clean] <filepath>
+    pdblister [manifest | download | filestore | clean] <filepath>
  
     === Create manifest === 
     
@@ -44,11 +48,27 @@ const USAGE: &'static str =
         called `symbols` in the current directory. To change this, change the
         SYMPATH global in the code.
 
+    === Create a file store ===
+
+        pdblister filestore <filepath>
+
+        This command recursively walks filepath to find all PEs. Any PE file
+        that is found is copied to the local directory 'filestore' using the
+        layout that symchk.exe uses to store normal files. This is used to
+        create a store of all PEs (such as .dlls), which can be used by a
+        kernel debugger to read otherwise paged out memory by downloading the
+        original PE source file from this filestore.
+
+        To use this filestore simply merge the contents in with a symbol
+        store/cache path. We keep it separate in this tool just to make it
+        easier to only get PDBs if that's all you really want.
+
     === Clean ===
 
         pdblister clean
 
         This command removes the `manifest` file as well as the symbol folder
+        and the filestore folder
 ";
 
 const SYMPATH: &'static str =
@@ -256,14 +276,8 @@ fn contains(range: &std::ops::Range<u32>, item: u32) -> bool
     (range.start <= item) && (item < range.end)
 }
 
-/// Given a `filename`, attempt to parse out any mention of a PDB file in it.
-///
-/// This returns success if it successfully parses the MZ, PE, finds a debug
-/// header, matches RSDS signature, and contains a valid reference to a PDB.
-///
-/// Returns a String of the same representation you get from `symchk` when
-/// outputting a manifest. "<filename>,<guid><age>,1"
-fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
+fn parse_pe(filename: &Path) ->
+    Result<(File, MZHeader, PEHeader, u32, u32), Box<std::error::Error>>
 {
     let mut fd = File::open(filename)?;
 
@@ -286,17 +300,52 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
     }
 
     /* Grab the number of tables from the bitness-specific table */
-    let num_tables = match pe_header.machine {
+    let (image_size, num_tables) = match pe_header.machine {
         IMAGE_FILE_MACHINE_I386 => {
             let opthdr: WindowsPEHeader32 = unsafe { read_struct(&mut fd)? };
-            opthdr.num_tables
+            (opthdr.size_of_image, opthdr.num_tables)
         }
         IMAGE_FILE_MACHINE_IA64 | IMAGE_FILE_MACHINE_AMD64 => {
             let opthdr: WindowsPEHeader64 = unsafe { read_struct(&mut fd)? };
-            opthdr.num_tables
+            (opthdr.size_of_image, opthdr.num_tables)
         }
         _ => return Err("Unsupported PE machine type".into())
     };
+
+    Ok((fd, mz_header, pe_header, image_size, num_tables))
+}
+
+fn get_file_path(filename: &Path) -> Result<String, Box<std::error::Error>>
+{
+    let (_, _, pe_header, image_size, _) = parse_pe(filename)?;
+
+    let filestr = format!("filestore/{}/{:08x}{:x}/{}",
+                          filename.file_name().unwrap().to_str().unwrap(),
+                          pe_header.timestamp,
+                          image_size,
+                          filename.file_name().unwrap().to_str().unwrap());
+
+    /* For hashes
+    let filestr = format!("{},{:08x}{:x},1",
+                          filename.file_name()
+                            .unwrap().to_str().unwrap(),
+                          pe_header.timestamp,
+                          image_size);*/
+
+    Ok(filestr)
+}
+
+/// Given a `filename`, attempt to parse out any mention of a PDB file in it.
+///
+/// This returns success if it successfully parses the MZ, PE, finds a debug
+/// header, matches RSDS signature, and contains a valid reference to a PDB.
+///
+/// Returns a string which is the same representation you get from `symchk`
+/// when outputting a manifest for the PDB "<filename>,<guid><age>,1"
+fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
+{
+    let (mut fd, mz_header, pe_header, _, num_tables) =
+        parse_pe(filename)?;
 
     /* Load all the data directories into a vector */
     let mut data_dirs = Vec::new();
@@ -400,13 +449,13 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
                 /* Further, since this path can be a full path, we get only
                  * the filename component of this path.
                  */
-                if let Some(filename) = Path::new(dpath).file_name() {
+                if let Some(pdbfilename) = Path::new(dpath).file_name() {
                     /* This is the format string used by symchk.
                      * Original is in SymChkCheckFiles()
                      * "%s,%08X%04X%04X%02X%02X%02X%02X%02X%02X%02X%02X%x,1"
                      */
                     let guidstr = format!("{},{:08X}{:04X}{:04X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:x},1",
-                                          filename.to_str().unwrap(),
+                                          pdbfilename.to_str().unwrap(),
                                           cv.guid_a, cv.guid_b, cv.guid_c,
                                           cv.guid_d[0], cv.guid_d[1],
                                           cv.guid_d[2], cv.guid_d[3],
@@ -465,8 +514,11 @@ fn main()
 
         let mut output_file = File::create("manifest").
             expect("Failed to create output manifest file");
+
+        /* Write out all the PDBs */
         output_file.write_all(output_pdbs.join("\n").as_bytes()).
-            expect("Failed to write to manifest file");
+            expect("Failed to write pdbs to manifest file");
+
     } else if args.len() == 2 && args[1] == "download" {
         const NUM_PIECES: usize = 64;
 
@@ -482,7 +534,8 @@ fn main()
         fd.read_to_string(&mut buf).expect("Failed to read file");
 
         /* Split the file into lines and collect into a vector */
-        let lines: Vec<String> = buf.lines().map(|l| String::from(l)).collect();
+        let mut lines: Vec<String> =
+            buf.lines().map(|l| String::from(l)).collect();
 
         /* If there is nothing to download, return out early */
         if lines.len() == 0 {
@@ -495,7 +548,18 @@ fn main()
          */
         let chunk_size = (lines.len() + NUM_PIECES - 1) / NUM_PIECES;
 
-        print!("Trying to download {} PDBs\n", lines.len());
+        print!("Original manifest has {} PDBs\n", lines.len());
+
+        lines.sort();
+        lines.dedup();
+
+        print!("Deduped manifest has {} PDBs\n", lines.len());
+
+        /* Shuffle filenames so files are not biased to the downloader based
+         * on name. This should lead to download threads having more even
+         * work.
+         */
+        thread_rng().shuffle(&mut lines);
 
         /* Create worker threads downloading each chunk using symchk */
         let mut threads = Vec::new();
@@ -519,9 +583,41 @@ fn main()
         for thr in threads {
             let _ = thr.join();
         }
+    } else if args.len() == 3 && args[1] == "filestore" {
+        /* List all files in the directory specified by args[2] */
+        print!("Generating file listing...\n");
+        let listing = recursive_listdir(&Path::new(args[2].as_str())).
+            expect("Failed to list directory");
+        print!("Done!\n");
+
+        let mut copies = 0;
+        for (ii, filename) in listing.iter().enumerate() {
+            if let Ok(fsname) = get_file_path(filename) {
+                let fsname = Path::new(&fsname);
+
+                if !fsname.exists() {
+                    let dir = fsname.parent().unwrap();
+                    std::fs::create_dir_all(dir).unwrap();
+                    
+                    if let Err(_) = std::fs::copy(filename, fsname) {
+                        print!("Failed to copy file {:?}\n", filename);
+                    } else {
+                        copies += 1;
+                    }
+                }
+            }
+
+            if STATUS_MESSAGES {
+                print!("\rParsed {} of {} files ({} copies)",
+                    ii + 1, listing.len(), copies);
+            }
+        }
+        print!("\n");
+
     } else if args.len() == 2 && args[1] == "clean" {
         /* Ignores all errors during clean */
         let _ = std::fs::remove_dir_all("symbols");
+        let _ = std::fs::remove_dir_all("filestore");
         let _ = std::fs::remove_file("manifest");
     } else {
         /* Print out usage information */

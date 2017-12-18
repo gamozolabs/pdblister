@@ -2,3 +2,5 @@
 **/*.rs.bk
 manifest
 symbols
+Cargo.lock
+

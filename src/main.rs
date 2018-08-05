@@ -41,12 +41,10 @@ const USAGE: &'static str =
 
     === Download from manifest ===
 
-        pdblister download
+        pdblister download <sympath>
 
         This command takes no parameters. It simply downloads all the PDBs
-        specified in the `manifest` file from msdl.microsoft.com to a folder
-        called `symbols` in the current directory. To change this, change the
-        SYMPATH global in the code.
+        specified in the `manifest` file.
 
     === Create a file store ===
 
@@ -70,9 +68,6 @@ const USAGE: &'static str =
         This command removes the `manifest` file as well as the symbol folder
         and the filestore folder
 ";
-
-const SYMPATH: &'static str =
-    "SRV*symbols*http://msdl.microsoft.com/download/symbols";
 
 /// Set this to true to enable status/progress messages
 const STATUS_MESSAGES: bool = true;
@@ -321,7 +316,7 @@ fn get_file_path(filename: &Path) -> Result<String, Box<std::error::Error>>
 
     let filestr = format!("filestore/{}/{:08x}{:x}/{}",
                           filename.file_name().unwrap().to_str().unwrap(),
-                          pe_header.timestamp,
+                          {pe_header.timestamp},
                           image_size,
                           filename.file_name().unwrap().to_str().unwrap());
 
@@ -456,12 +451,12 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
                      */
                     let guidstr = format!("{},{:08X}{:04X}{:04X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:02X}{:x},1",
                                           pdbfilename.to_str().unwrap(),
-                                          cv.guid_a, cv.guid_b, cv.guid_c,
-                                          cv.guid_d[0], cv.guid_d[1],
-                                          cv.guid_d[2], cv.guid_d[3],
-                                          cv.guid_d[4], cv.guid_d[5],
-                                          cv.guid_d[6], cv.guid_d[7],
-                                          cv.age);
+                                          {cv.guid_a}, {cv.guid_b}, {cv.guid_c},
+                                          {cv.guid_d[0]}, {cv.guid_d[1]},
+                                          {cv.guid_d[2]}, {cv.guid_d[3]},
+                                          {cv.guid_d[4]}, {cv.guid_d[5]},
+                                          {cv.guid_d[6]}, {cv.guid_d[7]},
+                                          {cv.age});
                     return Ok(guidstr)
                 } else {
                     return Err("Could not parse file from RSDS path".into())
@@ -475,11 +470,11 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
     Err("Failed to find RSDS codeview directory".into())
 }
 
-fn download_worker(filename: PathBuf)
+fn download_worker(filename: PathBuf, sympath: String)
 {
     let _ = Command::new("symchk").args(
         &["/im", filename.to_str().unwrap(), "/s",
-        SYMPATH]).
+        sympath.as_str()]).
         output().expect("Failed to run command");
 }
 
@@ -519,7 +514,7 @@ fn main()
         output_file.write_all(output_pdbs.join("\n").as_bytes()).
             expect("Failed to write pdbs to manifest file");
 
-    } else if args.len() == 2 && args[1] == "download" {
+    } else if args.len() == 3 && args[1] == "download" {
         const NUM_PIECES: usize = 64;
 
         /* Read the entire manifest file into a string */
@@ -576,7 +571,10 @@ fn main()
             }
 
             /* Create worker */
-            threads.push(thread::spawn(move || download_worker(tmp_path)));
+            let sympath = args[2].clone();
+            threads.push(thread::spawn(move || {
+                download_worker(tmp_path, sympath);
+            }));
         }
 
         /* Wait for all threads to complete. Discard return status */

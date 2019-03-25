@@ -15,7 +15,7 @@ has been generated use `symchk /im manifest /s <symbol path>`
 
 Usage:
 
-    pdblister [manifest | download | clean] <filepath>
+    pdblister [manifest | download | filestore | clean] <filepath>
  
     === Create manifest === 
     
@@ -31,18 +31,32 @@ Usage:
 
     === Download from manifest ===
 
-        pdblister download
+        pdblister download <sympath>
 
         This command takes no parameters. It simply downloads all the PDBs
-        specified in the `manifest` file from msdl.microsoft.com to a folder
-        called `symbols` in the current directory. To change this, change the
-        SYMPATH global in the code.
+        specified in the `manifest` file.
+
+    === Create a file store ===
+
+        pdblister filestore <filepath>
+
+        This command recursively walks filepath to find all PEs. Any PE file
+        that is found is copied to the local directory 'filestore' using the
+        layout that symchk.exe uses to store normal files. This is used to
+        create a store of all PEs (such as .dlls), which can be used by a
+        kernel debugger to read otherwise paged out memory by downloading the
+        original PE source file from this filestore.
+
+        To use this filestore simply merge the contents in with a symbol
+        store/cache path. We keep it separate in this tool just to make it
+        easier to only get PDBs if that's all you really want.
 
     === Clean ===
 
         pdblister clean
 
         This command removes the `manifest` file as well as the symbol folder
+        and the filestore folder
 
 # Future
 

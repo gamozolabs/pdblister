@@ -11,16 +11,16 @@
 
 extern crate rand;
 
-use rand::{thread_rng, Rng};
+// use rand::{thread_rng, Rng};
 
 use std::io;
 use std::env;
 use std::time::Instant;
-use std::thread;
-use std::process::Command;
 use std::fs::File;
 use std::io::{Read, Write, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
+
+mod sym;
 
 const USAGE: &'static str =
 "Usage:
@@ -272,7 +272,7 @@ fn contains(range: &std::ops::Range<u32>, item: u32) -> bool
 }
 
 fn parse_pe(filename: &Path) ->
-    Result<(File, MZHeader, PEHeader, u32, u32), Box<std::error::Error>>
+    Result<(File, MZHeader, PEHeader, u32, u32), Box<dyn std::error::Error>>
 {
     let mut fd = File::open(filename)?;
 
@@ -310,7 +310,7 @@ fn parse_pe(filename: &Path) ->
     Ok((fd, mz_header, pe_header, image_size, num_tables))
 }
 
-fn get_file_path(filename: &Path) -> Result<String, Box<std::error::Error>>
+fn get_file_path(filename: &Path) -> Result<String, Box<dyn std::error::Error>>
 {
     let (_, _, pe_header, image_size, _) = parse_pe(filename)?;
 
@@ -337,7 +337,7 @@ fn get_file_path(filename: &Path) -> Result<String, Box<std::error::Error>>
 ///
 /// Returns a string which is the same representation you get from `symchk`
 /// when outputting a manifest for the PDB "<filename>,<guid><age>,1"
-fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
+fn get_pdb(filename: &Path) -> Result<String, Box<dyn std::error::Error>>
 {
     let (mut fd, mz_header, pe_header, _, num_tables) =
         parse_pe(filename)?;
@@ -470,14 +470,6 @@ fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
     Err("Failed to find RSDS codeview directory".into())
 }
 
-fn download_worker(filename: PathBuf, sympath: String)
-{
-    let _ = Command::new("symchk").args(
-        &["/im", filename.to_str().unwrap(), "/s",
-        sympath.as_str()]).
-        output().expect("Failed to run command");
-}
-
 fn main()
 {
     let args: Vec<String> = env::args().collect();
@@ -515,8 +507,6 @@ fn main()
             expect("Failed to write pdbs to manifest file");
 
     } else if args.len() == 3 && args[1] == "download" {
-        const NUM_PIECES: usize = 64;
-
         /* Read the entire manifest file into a string */
         let mut buf = String::new();
         let mut fd = match File::open("manifest") {
@@ -538,11 +528,6 @@ fn main()
             return;
         }
 
-        /* Calculate number of entries per temporary manifest to split into
-         * NUM_PIECES chunks.
-         */
-        let chunk_size = (lines.len() + NUM_PIECES - 1) / NUM_PIECES;
-
         print!("Original manifest has {} PDBs\n", lines.len());
 
         lines.sort();
@@ -550,36 +535,10 @@ fn main()
 
         print!("Deduped manifest has {} PDBs\n", lines.len());
 
-        /* Shuffle filenames so files are not biased to the downloader based
-         * on name. This should lead to download threads having more even
-         * work.
-         */
-        thread_rng().shuffle(&mut lines);
-
-        /* Create worker threads downloading each chunk using symchk */
-        let mut threads = Vec::new();
-        for (ii, lines) in lines.chunks(chunk_size).enumerate() {
-            let mut tmp_path = env::temp_dir();
-            tmp_path.push(format!("manifest_{:04}", ii));
-
-            {
-                /* Create chunked manifest file */
-                let mut fd = File::create(&tmp_path).
-                    expect("Failed to create split manifest");
-                fd.write_all(lines.join("\n").as_bytes()).
-                    expect("Failed to write split manifest");
-            }
-
-            /* Create worker */
-            let sympath = args[2].clone();
-            threads.push(thread::spawn(move || {
-                download_worker(tmp_path, sympath);
-            }));
-        }
-
-        /* Wait for all threads to complete. Discard return status */
-        for thr in threads {
-            let _ = thr.join();
+        match sym::download_manifest(args[2].clone(), lines)
+        {
+            Ok(_) => println!("Success!"),
+            Err(e) => println!("Failed: {}", e),
         }
     } else if args.len() == 3 && args[1] == "filestore" {
         /* List all files in the directory specified by args[2] */

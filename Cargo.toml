@@ -11,5 +11,5 @@ reqwest = "0.10.8"
 indicatif = "0.15.0"
 
 [dependencies.tokio]
-version = "0.2.22"
-features = ["fs", "rt-threaded"]
+version = "1.1.1"
+features = ["fs", "rt-multi-thread", "io-util", "macros"]

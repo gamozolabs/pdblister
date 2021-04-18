@@ -272,7 +272,7 @@ fn contains(range: &std::ops::Range<u32>, item: u32) -> bool
 }
 
 fn parse_pe(filename: &Path) ->
-    Result<(File, MZHeader, PEHeader, u32, u32), Box<std::error::Error>>
+    Result<(File, MZHeader, PEHeader, u32, u32), Box<dyn std::error::Error>>
 {
     let mut fd = File::open(filename)?;
 
@@ -310,7 +310,7 @@ fn parse_pe(filename: &Path) ->
     Ok((fd, mz_header, pe_header, image_size, num_tables))
 }
 
-fn get_file_path(filename: &Path) -> Result<String, Box<std::error::Error>>
+fn get_file_path(filename: &Path) -> Result<String, Box<dyn std::error::Error>>
 {
     let (_, _, pe_header, image_size, _) = parse_pe(filename)?;
 
@@ -337,7 +337,7 @@ fn get_file_path(filename: &Path) -> Result<String, Box<std::error::Error>>
 ///
 /// Returns a string which is the same representation you get from `symchk`
 /// when outputting a manifest for the PDB "<filename>,<guid><age>,1"
-fn get_pdb(filename: &Path) -> Result<String, Box<std::error::Error>>
+fn get_pdb(filename: &Path) -> Result<String, Box<dyn std::error::Error>>
 {
     let (mut fd, mz_header, pe_header, _, num_tables) =
         parse_pe(filename)?;
